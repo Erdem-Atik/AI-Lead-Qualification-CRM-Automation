@@ -1,0 +1,1301 @@
+{
+  "name": "AI Lead Qualification & CRM Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "7fd5f095-e937-4165-b551-c4a60731087c",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -16336,
+        1456
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate Input node\nconst body = $input.first().json.body || $input.first().json;\n\nconst errors = [];\nconst email = (body.email || '').trim();\nconst message = (body.message || '').trim();\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\nif (!email) {\n  errors.push('email alanı zorunludur.');\n} else if (!emailRegex.test(email)) {\n  errors.push('email formatı geçersiz.');\n}\n\nif (!message) {\n  errors.push('message alanı zorunludur.');\n} else if (message.length < 10) {\n  errors.push('message çok kısa, anlamlı bir lead extraction için yetersiz.');\n}\n\nconst isValid = errors.length === 0;\nconst domain = email.includes('@') ? email.split('@')[1] : null;\n\nreturn [{\n  json: {\n    is_valid: isValid,\n    errors,\n    normalized: {\n      company_name: (body.company_name || '').trim() || null,\n      contact_name: (body.contact_name || '').trim() || null,\n      email: email || null,\n      domain,\n      phone: (body.phone || '').trim() || null,\n      message: message || null,\n      source_channel: body.source_channel || 'web_form',\n      received_at: new Date().toISOString()\n    }\n  }\n}];\n"
+      },
+      "id": "ada47762-3ad1-4cab-b31b-2ce3b8d07429",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16128,
+        1456
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.is_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b2085d66-2424-4d82-aa09-cf69e5a4564d",
+      "name": "Is Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -15904,
+        1456
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"error\", \"errors\": $json.errors } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "9d072962-9d59-4729-b41b-a52b61a55a1c",
+      "name": "Respond - Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -15680,
+        1616
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build LLM Request node\nconst n = $json.normalized;\n\nconst systemPrompt = `You are a lead-qualification extraction assistant for a B2B infrastructure/telecom sales pipeline. Given a raw inbound lead message (which may be in Turkish or English), extract structured information and return ONLY valid JSON (no markdown, no explanation, no code fences) matching EXACTLY this schema:\n\n{\n  \"company_name\": string or null,\n  \"industry\": string or null,\n  \"project_type\": string or null,\n  \"company_size\": \"small\" | \"medium\" | \"enterprise\" | \"unknown\",\n  \"budget_range\": \"low\" | \"medium\" | \"high\" | \"unknown\",\n  \"urgency\": \"immediate\" | \"this_quarter\" | \"exploring\",\n  \"timeline\": string or null,\n  \"requirements\": string (concise summary, max 2 sentences),\n  \"confidence_score\": number between 0 and 1\n}\n\nRules:\n- confidence_score reflects how certain you are overall, based on how explicit the message is.\n- company_size: infer from contextual clues. Use \"unknown\" if no signal exists.\n- If budget or timeline are not mentioned, use \"unknown\" / null and lower confidence_score accordingly.\n- Do not invent facts not implied by the message.\n- Respond with raw JSON only, nothing else.`;\n\nconst userPrompt = `Company name hint (may be empty): ${n.company_name || 'unknown'}\nLead message:\n\"\"\"\n${n.message}\n\"\"\"`;\n\nreturn [{\n  json: {\n    llm_request: {\n      model: 'llama3.1:8b',\n      stream: false,\n      format: 'json',\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt }\n      ]\n    },\n    normalized: n\n  }\n}];\n"
+      },
+      "id": "f2a2443a-8786-401a-8287-92bad0e3608f",
+      "name": "Build LLM Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -15680,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llm_request) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "8c0a67fb-ab26-48b7-9f8d-213bfe48e0f6",
+      "name": "AI Extraction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -15456,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI Output node\nconst response = $input.first().json;\nlet extracted;\nlet parseError = null;\n\ntry {\n  const content = response.message?.content || response.response || '';\n  extracted = JSON.parse(content);\n} catch (e) {\n  parseError = e.message;\n  extracted = {\n    company_name: null,\n    company_size: 'unknown',\n    industry: null,\n    project_type: null,\n    budget_range: 'unknown',\n    urgency: 'exploring',\n    timeline: null,\n    requirements: null,\n    confidence_score: 0\n  };\n}\n\n// Deterministik confidence hesaplama.\n// llama3.1:8b'nin kendi bildirdigi confidence_score guvenilmez bulundu:\n// uc bagimsiz denemede, mesaj ne kadar net olursa olsun hep ~0.8'de sikisti.\n// Bunun yerine confidence, extraction'da kac alanin gercekten doldugunun\n// (null/unknown kalmadigi) oranindan hesaplaniyor - modelin oznel yargisina\n// degil, cikan verinin somut tamligina dayanan bir olcum.\nconst fieldsToCheck = [\n  'company_name',\n  'industry',\n  'project_type',\n  'company_size',\n  'budget_range',\n  'urgency',\n  'timeline',\n  'requirements'\n];\n\nconst unfilledValues = new Set([null, undefined, '', 'unknown']);\n\nlet filledCount = 0;\nfor (const field of fieldsToCheck) {\n  if (!unfilledValues.has(extracted[field])) {\n    filledCount++;\n  }\n}\n\nlet confidence = parseError ? 0 : filledCount / fieldsToCheck.length;\nconfidence = Math.max(0, Math.min(1, confidence));\n\nconst normalized = $('Build LLM Request').first().json.normalized;\n\nreturn [{\n  json: {\n    normalized,\n    extraction: {\n      ...extracted,\n      confidence_score: confidence,\n      // debug/karsilastirma icin LLM'in kendi bildirdigi degeri ayri tutuyoruz\n      llm_reported_confidence: typeof extracted.confidence_score === 'number' ? extracted.confidence_score : null\n    },\n    needs_human_review: confidence < 0.75 || !!parseError,\n    parse_error: parseError\n  }\n}];"
+      },
+      "id": "64781dbb-f00e-4743-b5d5-e72d87d7d1d6",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -15232,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "conf-cond-1",
+              "leftValue": "={{ $json.needs_human_review }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "42cb138f-1d4f-4a17-b557-d98c79cec138",
+      "name": "Confidence Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -15008,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"status\": \"pending_review\",\n  \"extraction\": $('Parse AI Output').first().json.extraction,\n  \"needs_human_review\": true,\n  \"message\": \"Lead düşük güvenilirlikle extract edildi, insan onayı bekleniyor. HubSpot'a henüz yazılmadı.\"\n} }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "fd909564-8e1e-4f8b-b8a4-c149626be85d",
+      "name": "Respond - Pending Review",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -14784,
+        1568
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Lead Extraction - İnsan Onayı Gerekli",
+        "formDescription": "AI extraction düşük güvenilirlikle (confidence < 0.75) tamamlandı. Bilgileri kontrol edip onaylayın veya reddedin.",
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "<p><strong>Şirket:</strong> {{ $('Parse AI Output').first().json.normalized.company_name || $('Parse AI Output').first().json.normalized.domain }}</p>\n<p><strong>Email:</strong> {{ $('Parse AI Output').first().json.normalized.email }}</p>\n<p><strong>Orijinal Mesaj:</strong> {{ $('Parse AI Output').first().json.normalized.message }}</p>\n<hr>\n<p><strong>AI Extraction (confidence: {{ $('Parse AI Output').first().json.extraction.confidence_score }}):</strong></p>\n<p>\nIndustry: {{ $('Parse AI Output').first().json.extraction.industry }}<br>\nProject Type: {{ $('Parse AI Output').first().json.extraction.project_type }}<br>\nCompany Size: {{ $('Parse AI Output').first().json.extraction.company_size }}<br>\nBudget: {{ $('Parse AI Output').first().json.extraction.budget_range }}<br>\nUrgency: {{ $('Parse AI Output').first().json.extraction.urgency }}<br>\nRequirements: {{ $('Parse AI Output').first().json.extraction.requirements }}\n</p>"
+            },
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Approve"
+                  },
+                  {
+                    "option": "Reject"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9943908e-95b4-4d13-8d10-010375658f3f",
+      "name": "Human Approval Request",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -14560,
+        1568
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "appr-cond-1",
+              "leftValue": "={{ $json.Decision }}",
+              "rightValue": "Approve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "df65fd04-9204-4502-9bdd-c775490f4836",
+      "name": "Approval Decision",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -14336,
+        1568
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined || v === '') ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const n = $('Parse AI Output').first().json.normalized;\n  const e = $('Parse AI Output').first().json.extraction;\n  return `INSERT INTO companies (name, domain, industry, company_size)\nVALUES (${esc(n.company_name || n.domain)}, ${esc(n.domain)}, ${esc(e.industry)}, ${esc(e.company_size)})\nON CONFLICT (domain) DO UPDATE SET\n  name = EXCLUDED.name,\n  updated_at = now()\nRETURNING id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "ea2be1d8-c7e6-44eb-8e76-42501a96c48d",
+      "name": "Upsert Company - Reject",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -14112,
+        1792
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined || v === '') ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const n = $('Parse AI Output').first().json.normalized;\n  const companyId = $('Upsert Company - Reject').first().json.id;\n  return `INSERT INTO contacts (company_id, full_name, email, phone)\nVALUES (${companyId}, ${esc(n.contact_name)}, ${esc(n.email)}, ${esc(n.phone)})\nON CONFLICT (email) DO UPDATE SET\n  company_id = EXCLUDED.company_id,\n  full_name = EXCLUDED.full_name,\n  phone = EXCLUDED.phone\nRETURNING id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "8a5217df-deda-41e9-959d-4f2a0946ccf5",
+      "name": "Upsert Contact - Reject",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -13888,
+        1792
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined || v === '') ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const n = $('Parse AI Output').first().json.normalized;\n  const e = $('Parse AI Output').first().json.extraction;\n  const companyId = $('Upsert Company - Reject').first().json.id;\n  const contactId = $('Upsert Contact - Reject').first().json.id;\n  const confidence = typeof e.confidence_score === 'number' ? e.confidence_score : 0;\n  return `INSERT INTO leads (company_id, contact_id, project_type, budget_range, timeline, requirements, raw_message, ai_confidence, status, source_channel)\nVALUES (${companyId}, ${contactId}, ${esc(e.project_type)}, ${esc(e.budget_range)}, ${esc(e.timeline)}, ${esc(e.requirements)}, ${esc(n.message)}, ${confidence}, 'rejected', ${esc(n.source_channel)})\nRETURNING id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "791272a1-49d3-4e08-9cb9-641789547262",
+      "name": "Insert Lead - Reject",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -13664,
+        1792
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined) ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const leadId = $('Insert Lead - Reject').first().json.id;\n  const detail = JSON.stringify({ decision: 'Reject', reviewed_at: new Date().toISOString() });\n  return `INSERT INTO interactions (lead_id, interaction_type, detail)\nVALUES (${leadId}, 'human_approval', ${esc(detail)});`;\n})() }}",
+        "options": {}
+      },
+      "id": "abe11606-b21c-4a09-9c5f-17622d74bc32",
+      "name": "Log Interaction - Reject",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -13440,
+        1792
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ `<!DOCTYPE html><html lang=\"tr\"><head><meta charset=\"utf-8\"><title>Reddedildi</title><style>body{font-family:sans-serif;background:#f7f4ee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{background:#fff;padding:32px 40px;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center;max-width:420px}h1{color:#993c1d;font-size:20px;margin:0 0 12px}p{color:#5f5e5a;font-size:14px;line-height:1.6;margin:0}</style></head><body><div><h1>✗ Lead reddedildi</h1><p><strong>${ $('Parse AI Output').first().json.normalized.company_name || $('Parse AI Output').first().json.normalized.domain || 'Bu lead' }</strong> insan incelemesi sonucunda reddedildi ve veritabanına kaydedildi.</p><p style=\"margin-top:8px\">Bu sekmeyi kapatabilirsiniz.</p></div></body></html>` }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "8a0f8138-4506-4743-abe8-c01723b28656",
+      "name": "Respond - Rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -13216,
+        1792
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT rule_name, weight_config, version FROM scoring_rules WHERE is_active = true;",
+        "options": {}
+      },
+      "id": "6752a6bd-de84-4723-98c9-c135c987cdc8",
+      "name": "Fetch Scoring Rules",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -14112,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Load Scoring Config node\n// scoring_rules tablosundan gelen aktif kurallari 'Fetch Scoring Rules' node'undan okuyor,\n// eksik/olmayan kural icin hardcoded default'a duser. product_fit keyword listesi\n// DB semasinda yok, o yuzden hala koddan geliyor.\n// response_target: bu execution'in yaniti kime donecek? 'browser' (reviewer form'u onayladiysa)\n// ya da 'api' (orijinal webhook caller'i, ya otomatik onay ya da hic review gerekmedi).\nconst prior = $('Parse AI Output').first().json;\n\nlet responseTarget = 'api';\ntry {\n  const decision = $('Approval Decision').first().json.Decision;\n  if (decision === 'Approve') responseTarget = 'browser';\n} catch (e) {\n  responseTarget = 'api';\n}\n\nconst rows = $input.all().map(item => item.json);\n\nconst defaults = {\n  budget: { max_points: 30, weights: { high: 30, medium: 15, low: 5, unknown: 0 } },\n  urgency: { max_points: 20, weights: { immediate: 20, this_quarter: 10, exploring: 3, unknown: 8 } },\n  company_size: { max_points: 20, weights: { enterprise: 20, medium: 12, small: 5, unknown: 8 } },\n  product_fit: { max_points: 30, weights: { exact_match: 30, partial_match: 15, poor_match: 0, unknown: 12 } }\n};\n\nconst config = {\n  budget: { max_points: defaults.budget.max_points, weights: { ...defaults.budget.weights } },\n  urgency: { max_points: defaults.urgency.max_points, weights: { ...defaults.urgency.weights } },\n  company_size: { max_points: defaults.company_size.max_points, weights: { ...defaults.company_size.weights } },\n  product_fit: {\n    max_points: defaults.product_fit.max_points,\n    weights: { ...defaults.product_fit.weights },\n    keywords: {\n      exact: ['fiber', 'fiber optic', 'fiber optik', 'altyapı', 'infrastructure', 'network buildout', 'omurga', 'backbone'],\n      partial: ['telecom', 'telekom', 'network', 'connectivity', 'bağlantı', 'kablo']\n    }\n  },\n  version: 'v1'\n};\n\nfor (const row of rows) {\n  const key = row.rule_name;\n  if (config[key] && row.weight_config) {\n    config[key].weights = { ...config[key].weights, ...row.weight_config };\n  }\n}\nif (rows.length && rows[0].version) {\n  config.version = rows[0].version;\n}\n\nreturn [{ json: { ...prior, scoring_config: config, response_target: responseTarget } }];"
+      },
+      "id": "ee9bd8b2-d6d2-4556-b7dc-feff2afd160f",
+      "name": "Load Scoring Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -13888,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate Lead Score node\nconst extraction = $json.extraction;\nconst config = $json.scoring_config;\n\nconst budgetKey = extraction.budget_range || 'unknown';\nconst budgetScore = config.budget.weights[budgetKey] ?? 0;\n\nconst urgencyKey = extraction.urgency || 'exploring';\nconst urgencyScore = config.urgency.weights[urgencyKey] ?? 0;\n\nconst sizeKey = extraction.company_size || 'unknown';\nconst companyScore = config.company_size.weights[sizeKey] ?? 0;\n\nconst searchText = `${extraction.project_type || ''} ${extraction.requirements || ''}`.toLowerCase();\nconst { exact, partial } = config.product_fit.keywords;\n\nlet fitLevel = 'poor_match';\nif (exact.some(kw => searchText.includes(kw))) {\n  fitLevel = 'exact_match';\n} else if (partial.some(kw => searchText.includes(kw))) {\n  fitLevel = 'partial_match';\n}\nconst fitScore = config.product_fit.weights[fitLevel];\n\nconst totalScore = budgetScore + urgencyScore + companyScore + fitScore;\n\nreturn [{\n  json: {\n    ...$json,\n    lead_score: {\n      budget_score: budgetScore,\n      urgency_score: urgencyScore,\n      company_score: companyScore,\n      fit_score: fitScore,\n      fit_level: fitLevel,\n      total_score: totalScore,\n      scoring_version: config.version\n    }\n  }\n}];"
+      },
+      "id": "ad9e4e59-66b3-4642-98a9-4dfbd6366d39",
+      "name": "Calculate Lead Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -13664,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined || v === '') ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const n = $('Calculate Lead Score').first().json.normalized;\n  const e = $('Calculate Lead Score').first().json.extraction;\n  return `INSERT INTO companies (name, domain, industry, company_size)\nVALUES (${esc(n.company_name || n.domain)}, ${esc(n.domain)}, ${esc(e.industry)}, ${esc(e.company_size)})\nON CONFLICT (domain) DO UPDATE SET\n  name = EXCLUDED.name,\n  industry = EXCLUDED.industry,\n  company_size = EXCLUDED.company_size,\n  updated_at = now()\nRETURNING id, hubspot_id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "bc44a392-ebfa-4a49-b9c9-755318b5bc6c",
+      "name": "Upsert Company",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -13440,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined || v === '') ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const n = $('Calculate Lead Score').first().json.normalized;\n  const companyId = $('Upsert Company').first().json.id;\n  return `INSERT INTO contacts (company_id, full_name, email, phone)\nVALUES (${companyId}, ${esc(n.contact_name)}, ${esc(n.email)}, ${esc(n.phone)})\nON CONFLICT (email) DO UPDATE SET\n  company_id = EXCLUDED.company_id,\n  full_name = EXCLUDED.full_name,\n  phone = EXCLUDED.phone\nRETURNING id, hubspot_id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "c28f3e9c-3ab8-4b42-ac19-7a1b97e9617c",
+      "name": "Upsert Contact",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -13216,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined || v === '') ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const n = $('Calculate Lead Score').first().json.normalized;\n  const e = $('Calculate Lead Score').first().json.extraction;\n  const companyId = $('Upsert Company').first().json.id;\n  const contactId = $('Upsert Contact').first().json.id;\n  const confidence = typeof e.confidence_score === 'number' ? e.confidence_score : 0;\n  return `INSERT INTO leads (company_id, contact_id, project_type, budget_range, timeline, requirements, raw_message, ai_confidence, status, source_channel)\nVALUES (${companyId}, ${contactId}, ${esc(e.project_type)}, ${esc(e.budget_range)}, ${esc(e.timeline)}, ${esc(e.requirements)}, ${esc(n.message)}, ${confidence}, 'pending', ${esc(n.source_channel)})\nRETURNING id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "ec6c6060-f7aa-40fe-933e-8f2387765624",
+      "name": "Insert Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -12992,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const ls = $('Calculate Lead Score').first().json.lead_score;\n  const leadId = $('Insert Lead').first().json.id;\n  return `INSERT INTO lead_scores (lead_id, budget_score, urgency_score, company_score, fit_score, total_score, scoring_version)\nVALUES (${leadId}, ${ls.budget_score}, ${ls.urgency_score}, ${ls.company_score}, ${ls.fit_score}, ${ls.total_score}, '${ls.scoring_version}')\nRETURNING id;`;\n})() }}",
+        "options": {}
+      },
+      "id": "16d518aa-f664-4cb9-a291-fe9d8c0a3b20",
+      "name": "Insert Lead Score",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -12768,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined) ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const leadId = $('Insert Lead').first().json.id;\n  const detail = JSON.stringify({\n    confidence: $('Calculate Lead Score').first().json.extraction.confidence_score,\n    needed_human_review: $('Calculate Lead Score').first().json.needs_human_review,\n    parse_error: $('Calculate Lead Score').first().json.parse_error || null\n  });\n  return `INSERT INTO interactions (lead_id, interaction_type, detail)\nVALUES (${leadId}, 'ai_extraction', ${esc(detail)});`;\n})() }}",
+        "options": {}
+      },
+      "id": "5633b1a7-32cb-4f32-a48c-698153883b04",
+      "name": "Log Interaction - AI Extraction",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -12544,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "company",
+        "name": "={{ $('Calculate Lead Score').first().json.normalized.company_name || $('Calculate Lead Score').first().json.normalized.domain }}",
+        "additionalFields": {
+          "companyDomainName": "={{ $('Calculate Lead Score').first().json.normalized.domain }}"
+        }
+      },
+      "id": "b6b84465-fcdb-4618-82e3-cc219829a91c",
+      "name": "HubSpot: Create Company",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.2,
+      "position": [
+        -12096,
+        1456
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "HubSpot Service Key account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "email": "={{ $('Calculate Lead Score').first().json.normalized.email }}",
+        "additionalFields": {
+          "associatedCompanyId": "={{ $('Resolve Company ID').first().json.companyId }}",
+          "firstName": "={{ ($('Calculate Lead Score').first().json.normalized.contact_name || '').trim().split(/\\s+/).filter(Boolean)[0] || '' }}",
+          "lastName": "={{ (() => { const parts = ($('Calculate Lead Score').first().json.normalized.contact_name || '').trim().split(/\\s+/).filter(Boolean); return parts.length > 1 ? parts.slice(1).join(' ') : ''; })() }}"
+        },
+        "options": {}
+      },
+      "id": "1f945444-9252-41a0-b345-633ed27e23b8",
+      "name": "HubSpot: Create/Update Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.2,
+      "position": [
+        -11648,
+        1344
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "HubSpot Service Key account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "deal",
+        "stage": "appointmentscheduled",
+        "additionalFields": {
+          "associatedCompany": "={{ [parseInt($('Resolve Company ID').first().json.companyId)] }}",
+          "associatedVids": "={{ [parseInt($node[\"HubSpot: Create/Update Contact\"].json.vid)] }}",
+          "customPropertiesUi": {
+            "customPropertiesValues": [
+              {
+                "property": "project_type",
+                "value": "={{ $('Calculate Lead Score').first().json.extraction.project_type }}"
+              },
+              {
+                "property": "budget_range",
+                "value": "={{ $('Calculate Lead Score').first().json.extraction.budget_range }}"
+              },
+              {
+                "property": "lead_score",
+                "value": "={{ $('Calculate Lead Score').first().json.lead_score.total_score }}"
+              }
+            ]
+          },
+          "dealName": "={{ ($('Calculate Lead Score').first().json.normalized.company_name || $('Calculate Lead Score').first().json.normalized.domain) + ' - Lead' }}"
+        }
+      },
+      "id": "507fec5d-1a82-4dc9-a6f4-3bb272d86777",
+      "name": "HubSpot: Create Deal",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2.2,
+      "position": [
+        -11424,
+        1344
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "HubSpot Service Key account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined) ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const companyHsId = $('Resolve Company ID').first().json.companyId;\n  const contactHsId = $('HubSpot: Create/Update Contact').first().json.vid;\n  const dealHsId = $('HubSpot: Create Deal').first().json.dealId;\n  const companyDbId = $('Upsert Company').first().json.id;\n  const contactDbId = $('Upsert Contact').first().json.id;\n  const leadDbId = $('Insert Lead').first().json.id;\n  return `UPDATE companies SET hubspot_id = ${esc(companyHsId)}, updated_at = now() WHERE id = ${companyDbId};\nUPDATE contacts SET hubspot_id = ${esc(contactHsId)} WHERE id = ${contactDbId};\nUPDATE leads SET hubspot_deal_id = ${esc(dealHsId)}, status = 'converted' WHERE id = ${leadDbId};`;\n})() }}",
+        "options": {}
+      },
+      "id": "c85a2eca-defc-4f2f-b310-85ec488f4f42",
+      "name": "Update HubSpot IDs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -11200,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "score-cond-1",
+              "leftValue": "={{ $('Calculate Lead Score').first().json.lead_score.total_score }}",
+              "rightValue": 70,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0f0e0ba1-93e2-49a7-9de6-96599511a42c",
+      "name": "Score Decision",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -10976,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "sales@yourcompany.com",
+        "subject": "={{ \"🔥 Yüksek Skorlu Lead: \" + ($('Calculate Lead Score').first().json.normalized.company_name || $('Calculate Lead Score').first().json.normalized.domain) + \" (Skor: \" + $('Calculate Lead Score').first().json.lead_score.total_score + \")\" }}",
+        "message": "={{ \n`Yeni yüksek skorlu lead geldi:\n\nŞirket: ${$('Calculate Lead Score').first().json.normalized.company_name || $('Calculate Lead Score').first().json.normalized.domain}\nİletişim: ${$('Calculate Lead Score').first().json.normalized.contact_name || '-'} <${$('Calculate Lead Score').first().json.normalized.email}>\nTelefon: ${$('Calculate Lead Score').first().json.normalized.phone || '-'}\n\nLead Skoru: ${$('Calculate Lead Score').first().json.lead_score.total_score} / 100\n  - Budget: ${$('Calculate Lead Score').first().json.lead_score.budget_score}\n  - Urgency: ${$('Calculate Lead Score').first().json.lead_score.urgency_score}\n  - Company Size: ${$('Calculate Lead Score').first().json.lead_score.company_score}\n  - Product Fit: ${$('Calculate Lead Score').first().json.lead_score.fit_score} (${$('Calculate Lead Score').first().json.lead_score.fit_level})\n\nProje Tipi: ${$('Calculate Lead Score').first().json.extraction.project_type || '-'}\nBütçe Aralığı: ${$('Calculate Lead Score').first().json.extraction.budget_range || '-'}\nAciliyet: ${$('Calculate Lead Score').first().json.extraction.urgency || '-'}\nTalepler: ${$('Calculate Lead Score').first().json.extraction.requirements || '-'}\n\nHubSpot Deal ID: ${$('HubSpot: Create Deal').first().json.dealId}`\n}}",
+        "options": {}
+      },
+      "id": "edfefa5d-eaac-4e40-bf06-10c3f2959b5a",
+      "name": "Sales Notification",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -10752,
+        1232
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Calculate Lead Score').first().json.normalized.email }}",
+        "subject": "Talebiniz İçin Teşekkürler",
+        "message": "={{ \n`Merhaba ${$('Calculate Lead Score').first().json.normalized.contact_name || ''},\n\nİlginiz için teşekkür ederiz. Talebinizi aldık ve ekibimiz en kısa sürede sizinle iletişime geçecek.\n\nBu arada, projenizle ilgili paylaşmak istediğiniz ek bilgi olursa bu e-postaya yanıt verebilirsiniz.\n\nSaygılarımızla,\nSatış Ekibi`\n}}",
+        "options": {}
+      },
+      "id": "d3d2208f-6235-4c2d-a67a-e4117a7ed4b8",
+      "name": "Automated Follow-up",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -10752,
+        1456
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "{{ (() => {\n  const esc = v => (v === null || v === undefined) ? 'NULL' : `'${String(v).replace(/'/g, \"''\")}'`;\n  const leadId = $('Insert Lead').first().json.id;\n  const score = $('Calculate Lead Score').first().json.lead_score.total_score;\n  const channel = score > 70 ? 'sales_notification' : 'automated_followup';\n  const detail = JSON.stringify({ channel, total_score: score });\n  return `INSERT INTO interactions (lead_id, interaction_type, detail)\nVALUES (${leadId}, 'notification_sent', ${esc(detail)});`;\n})() }}",
+        "options": {}
+      },
+      "id": "1c03659a-81ed-44b2-9402-714bf32eb072",
+      "name": "Log Interaction - Notification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -10528,
+        1344
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "rt-cond-1",
+              "leftValue": "={{ $('Load Scoring Config').first().json.response_target }}",
+              "rightValue": "browser",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7c0b37c-2336-4639-89be-b31aada9ed61",
+      "name": "Response Target Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -10304,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ `<!DOCTYPE html><html lang=\"tr\"><head><meta charset=\"utf-8\"><title>Onaylandı</title><style>body{font-family:sans-serif;background:#f7f4ee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{background:#fff;padding:32px 40px;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);text-align:center;max-width:460px}h1{color:#0f6e56;font-size:20px;margin:0 0 12px}p{color:#5f5e5a;font-size:14px;line-height:1.6;margin:6px 0}code{background:#f1efe8;padding:2px 6px;border-radius:4px}</style></head><body><div><h1>✓ Lead onaylandı</h1><p><strong>${ $('Calculate Lead Score').first().json.normalized.company_name || $('Calculate Lead Score').first().json.normalized.domain }</strong> HubSpot'a ve veritabanına kaydedildi.</p><p>Lead skoru: <code>${ $('Calculate Lead Score').first().json.lead_score.total_score }/100</code></p><p style=\"margin-top:12px\">Bu sekmeyi kapatabilirsiniz.</p></div></body></html>` }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "770684e2-6cb2-444f-9244-ad9a425dcd96",
+      "name": "Respond - Accepted (Reviewer)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -10080,
+        1232
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  \"status\": \"accepted\", \n  \"extraction\": $('Calculate Lead Score').first().json.extraction, \n  \"needs_human_review\": $('Calculate Lead Score').first().json.needs_human_review,\n  \"lead_score\": $('Calculate Lead Score').first().json.lead_score,\n  \"postgres\": {\n    \"lead_id\": $('Insert Lead').first().json.id\n  },\n  \"hubspot\": {\n    \"company_id\": $('Resolve Company ID').first().json.companyId,\n    \"contact_id\": $('HubSpot: Create/Update Contact').first().json.vid,\n    \"deal_id\": $('HubSpot: Create Deal').first().json.dealId\n  },\n  \"notification_sent\": $('Calculate Lead Score').first().json.lead_score.total_score > 70 ? \"sales_notification\" : \"automated_followup\"\n} }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "019310c4-cd51-436d-ae98-913cfe01e564",
+      "name": "Respond - Accepted (API)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -10080,
+        1456
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "reviewer@yourcompany.com",
+        "subject": "={{ 'Onay bekleyen lead: ' + ($('Parse AI Output').first().json.normalized.company_name || $('Parse AI Output').first().json.normalized.domain) + ' (güven: ' + $('Parse AI Output').first().json.extraction.confidence_score + ')' }}",
+        "emailType": "html",
+        "message": "={{ (() => {\n  const esc = v => String(v ?? '-').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const p = $('Parse AI Output').first().json;\n  const n = p.normalized;\n  const e = p.extraction;\n  const url = $execution.resumeFormUrl;\n  return `<div style=\"font-family:sans-serif;font-size:14px;line-height:1.6;color:#1f1e1b;max-width:560px\">\n<h2 style=\"margin:0 0 12px\">Onay bekleyen lead</h2>\n<p>AI extraction düşük güvenle tamamlandı (güven skoru: <b>${esc(e.confidence_score)}</b>). Bilgileri kontrol edip onaylayın veya reddedin.</p>\n<p><b>Şirket:</b> ${esc(n.company_name || n.domain)}<br>\n<b>İletişim:</b> ${esc(n.contact_name)} &lt;${esc(n.email)}&gt;<br>\n<b>Orijinal mesaj:</b> ${esc(n.message)}</p>\n<p><b>AI çıkarımı</b><br>\nSektör: ${esc(e.industry)}<br>\nProje tipi: ${esc(e.project_type)}<br>\nŞirket büyüklüğü: ${esc(e.company_size)}<br>\nBütçe: ${esc(e.budget_range)}<br>\nAciliyet: ${esc(e.urgency)}<br>\nTalepler: ${esc(e.requirements)}</p>\n<p style=\"margin:24px 0\"><a href=\"${url}\" style=\"background:#0f6e56;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600\">İncele ve karar ver</a></p>\n<p style=\"color:#5f5e5a;font-size:12px\">Buton çalışmazsa bu adresi tarayıcıya yapıştırın:<br>${esc(url)}</p>\n</div>`;\n})() }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "0b225bd5-fac2-4424-84f1-e04146e28981",
+      "name": "Send Approval Request Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -14672,
+        1680
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "company-cond-1",
+              "leftValue": "={{ (() => {\n  const co = $('Upsert Company').first().json;\n  const domain = String($('Calculate Lead Score').first().json.normalized.domain || '').toLowerCase();\n  const freeMail = [\"gmail.com\", \"googlemail.com\", \"yahoo.com\", \"yahoo.com.tr\", \"outlook.com\", \"outlook.com.tr\", \"hotmail.com\", \"hotmail.com.tr\", \"live.com\", \"msn.com\", \"icloud.com\", \"me.com\", \"proton.me\", \"protonmail.com\", \"aol.com\", \"yandex.com\", \"yandex.com.tr\", \"gmx.com\", \"mail.com\", \"zoho.com\"];\n  return !!co.hubspot_id && !freeMail.includes(domain);\n})() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "779ef828-fd5d-4c9c-8420-0c94937e8b72",
+      "name": "HubSpot Company Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -12320,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// IF dogru kolundan geliyorsa girdide companyId yok -> Supabase'deki mevcut hubspot_id kullanilir.\n// IF yanlis kolundan (HubSpot: Create Company) geliyorsa girdide yeni companyId var.\nconst created = $input.first().json.companyId;\nconst existing = $('Upsert Company').first().json.hubspot_id;\nconst companyId = created || existing;\nreturn [{ json: { companyId: String(companyId), reused: !created } }];"
+      },
+      "id": "9f5caf5e-2242-46ae-aa73-4c9d19212069",
+      "name": "Resolve Company ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -11872,
+        1344
+      ]
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Is Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid?": {
+      "main": [
+        [
+          {
+            "node": "Build LLM Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build LLM Request": {
+      "main": [
+        [
+          {
+            "node": "AI Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extraction": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Confidence Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence Check": {
+      "main": [
+        [
+          {
+            "node": "Respond - Pending Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Scoring Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond - Pending Review": {
+      "main": [
+        [
+          {
+            "node": "Send Approval Request Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Approval Request": {
+      "main": [
+        [
+          {
+            "node": "Approval Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approval Decision": {
+      "main": [
+        [
+          {
+            "node": "Fetch Scoring Rules",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert Company - Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Company - Reject": {
+      "main": [
+        [
+          {
+            "node": "Upsert Contact - Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Contact - Reject": {
+      "main": [
+        [
+          {
+            "node": "Insert Lead - Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Lead - Reject": {
+      "main": [
+        [
+          {
+            "node": "Log Interaction - Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Interaction - Reject": {
+      "main": [
+        [
+          {
+            "node": "Respond - Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Scoring Rules": {
+      "main": [
+        [
+          {
+            "node": "Load Scoring Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Scoring Config": {
+      "main": [
+        [
+          {
+            "node": "Calculate Lead Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Lead Score": {
+      "main": [
+        [
+          {
+            "node": "Upsert Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Company": {
+      "main": [
+        [
+          {
+            "node": "Upsert Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Contact": {
+      "main": [
+        [
+          {
+            "node": "Insert Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Lead": {
+      "main": [
+        [
+          {
+            "node": "Insert Lead Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Lead Score": {
+      "main": [
+        [
+          {
+            "node": "Log Interaction - AI Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Interaction - AI Extraction": {
+      "main": [
+        [
+          {
+            "node": "HubSpot Company Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Create Company": {
+      "main": [
+        [
+          {
+            "node": "Resolve Company ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Create/Update Contact": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Create Deal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Create Deal": {
+      "main": [
+        [
+          {
+            "node": "Update HubSpot IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update HubSpot IDs": {
+      "main": [
+        [
+          {
+            "node": "Score Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Decision": {
+      "main": [
+        [
+          {
+            "node": "Sales Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Automated Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales Notification": {
+      "main": [
+        [
+          {
+            "node": "Log Interaction - Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Automated Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Log Interaction - Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Interaction - Notification": {
+      "main": [
+        [
+          {
+            "node": "Response Target Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response Target Check": {
+      "main": [
+        [
+          {
+            "node": "Respond - Accepted (Reviewer)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - Accepted (API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Approval Request Email": {
+      "main": [
+        [
+          {
+            "node": "Human Approval Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Company Exists?": {
+      "main": [
+        [
+          {
+            "node": "Resolve Company ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HubSpot: Create Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Company ID": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Create/Update Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "active": false
+}

@@ -1,0 +1,20 @@
+flowchart TD
+    A[Web form / API client] -->|POST JSON| B[n8n Webhook]
+    B --> C{Valid input?}
+    C -- no --> C1[400 + error list]
+    C -- yes --> D[Local LLM extraction<br/>Ollama llama3.1:8b]
+    D --> E[Parse JSON + deterministic confidence<br/>filled fields / 8]
+    E --> F{Confidence >= 0.75?}
+    F -- no --> G[Reviewer email with<br/>approval link] --> H[Wait: human decision]
+    H -- Reject --> R[(Supabase: lead = rejected)]
+    H -- Approve --> I
+    F -- yes --> I[Score lead 0-100<br/>rules from Supabase]
+    I --> J[(Supabase: company, contact,<br/>lead, score, log)]
+    J --> K{HubSpot company<br/>already known?}
+    K -- yes --> M
+    K -- no --> L[HubSpot: create company] --> M[HubSpot: contact + deal]
+    M --> N{Score > 70?}
+    N -- yes --> O[Email sales team]
+    N -- no --> P[Automated follow-up email]
+    O --> Q[Log interaction + JSON response]
+    P --> Q

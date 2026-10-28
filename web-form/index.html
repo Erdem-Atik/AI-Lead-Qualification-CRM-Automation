@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request a Quote - FiberLink Solutions (demo)</title>
+<style>
+  :root { --bg:#f7f4ee; --card:#fff; --ink:#1f1e1b; --muted:#5f5e5a; --accent:#0f6e56; --err:#993c1d; --line:#d9d6cc; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink);
+         display:flex; justify-content:center; padding:40px 16px; }
+  .card { background:var(--card); width:100%; max-width:520px; padding:32px 36px; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  h1 { font-size:22px; margin:0 0 6px; }
+  p.sub { color:var(--muted); font-size:14px; margin:0 0 24px; line-height:1.5; }
+  label { display:block; font-size:13px; font-weight:600; margin:16px 0 6px; }
+  input, textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; font-size:14px; background:#fff; }
+  input:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:-1px; border-color:var(--accent); }
+  textarea { min-height:130px; resize:vertical; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:520px){ .row{ grid-template-columns:1fr; } .card{ padding:24px 20px; } }
+  button { margin-top:24px; width:100%; padding:12px; border:0; border-radius:8px; background:var(--accent); color:#fff;
+           font:inherit; font-weight:600; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .msg { margin-top:20px; padding:14px 16px; border-radius:8px; font-size:14px; line-height:1.5; display:none; }
+  .msg.ok { display:block; background:#e6f3ee; color:#0b4f3e; }
+  .msg.err { display:block; background:#faece7; color:var(--err); }
+  .msg.wait { display:block; background:#f1efe8; color:var(--muted); }
+  .demo { margin-top:24px; font-size:12px; color:var(--muted); text-align:center; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Request a Quote</h1>
+  <p class="sub">Tell us about your fiber optic or network infrastructure project. Our team will get back to you shortly.</p>
+
+  <form id="leadForm" novalidate>
+    <div class="row">
+      <div>
+        <label for="contact_name">Your name</label>
+        <input id="contact_name" name="contact_name" autocomplete="name">
+      </div>
+      <div>
+        <label for="company_name">Company</label>
+        <input id="company_name" name="company_name" autocomplete="organization">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="email">Email *</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+      </div>
+      <div>
+        <label for="phone">Phone</label>
+        <input id="phone" name="phone" type="tel" autocomplete="tel">
+      </div>
+    </div>
+    <label for="message">Project details *</label>
+    <textarea id="message" name="message" required
+      placeholder="Project type, location, timeline, budget range, anything that helps us understand your needs..."></textarea>
+
+    <button id="submitBtn" type="submit">Send request</button>
+  </form>
+
+  <div id="result" class="msg"></div>
+  <div class="demo">Demo form - part of an AI Lead Qualification &amp; CRM Automation portfolio project.</div>
+</div>
+
+<script>
+  // ---- AYAR ----
+  // Test modu:  n8n'de "Listen for test event" a bastiktan sonra tek istek kabul eder -> "webhook-test"
+  // Canli mod:  workflow aktifken surekli calisir                                     -> "webhook"
+  const USE_TEST_WEBHOOK = false;
+  const WEBHOOK_URL = "http://localhost:5678/" + (USE_TEST_WEBHOOK ? "webhook-test" : "webhook") + "/lead-intake";
+  // --------------
+
+  const form = document.getElementById("leadForm");
+  const btn = document.getElementById("submitBtn");
+  const result = document.getElementById("result");
+
+  function show(type, text) {
+    result.className = "msg " + type;
+    result.textContent = text;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form).entries());
+    data.source_channel = "web_form";
+
+    btn.disabled = true;
+    show("wait", "Sending your request... this can take up to a minute while we analyze it.");
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+
+    try {
+      const res = await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        signal: controller.signal
+      });
+      const body = await res.json().catch(() => ({}));
+
+      if (res.status === 400 && Array.isArray(body.errors)) {
+        show("err", "Please check your input: " + body.errors.join(" "));
+      } else if (res.ok) {
+        show("ok", "Thank you! We received your request and will be in touch shortly.");
+        form.reset();
+      } else {
+        show("err", "Something went wrong (" + res.status + "). Please try again later.");
+      }
+    } catch (err) {
+      show("err", err.name === "AbortError"
+        ? "The request took too long. Please try again."
+        : "Could not reach the server. Is n8n running?");
+    } finally {
+      clearTimeout(timer);
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
